@@ -1,0 +1,75 @@
+name: Release Windows
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a versioned commit on main
+        shell: bash
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          python - <<'PY'
+          import os, re, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"]
+          if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", tag) or tag != f"v{version}":
+              raise SystemExit("Release tag must be v + the package version in Cargo.toml")
+          PY
+  build:
+    needs: validate
+    uses: ./.github/workflows/windows.yml
+  publish:
+    name: Publish executable and generated notes
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: TexStudio-windows-x86_64
+          path: dist
+      - name: Verify release checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum --check --strict *-SHA256SUMS.txt
+      - name: Create draft with assets, then publish
+        shell: bash
+        run: |
+          # A published release is never overwritten. Failed drafts can be retried.
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > is-draft.txt 2>/dev/null; then
+            if [ "$(cat is-draft.txt)" != true ]; then
+              echo "This release is already published; refusing to replace its assets."
+              exit 1
+            fi
+          else
+            args=(--draft --verify-tag --generate-notes --title "TexStudio $RELEASE_TAG")
+            if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" "${args[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" dist/*.exe dist/*.zip dist/*-SHA256SUMS.txt --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
