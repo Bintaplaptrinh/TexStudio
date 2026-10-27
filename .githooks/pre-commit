@@ -1,0 +1,3 @@
+#!/bin/sh
+# Inspect the index, including secrets that were removed only from the worktree.
+exec python scripts/check-privacy.py
