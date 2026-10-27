@@ -1,0 +1,6 @@
+{
+  "name": "first-paper",
+  "main": "main.tex",
+  "engine": "xetex",
+  "debounce_ms": 650
+}
